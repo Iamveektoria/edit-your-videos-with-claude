@@ -132,8 +132,9 @@ def main():
     if ok:
         ok = ensure_model() and ok
 
-    if ok:
-        print("READY")
+    # Nothing is printed on a clean, already-set-up run - exit code alone says
+    # it's ready. Only the "Setting things up" line (when work was needed) and
+    # the one plain failure sentence above are meant for the buyer to ever see.
     sys.exit(0 if ok else 1)
 
 
