@@ -95,3 +95,45 @@ def lens_blur(bgr_float, radius_at_full_res, downscale=0.5):
 
 
 BLUR_RADIUS = {"light": 8, "medium": 15, "strong": 26}
+
+
+def stray_fraction(alpha_u8, visible_thresh=80):
+    """Fraction of frame pixels that are part-visible (alpha>thresh) but NOT
+    in the single largest connected blob - i.e. isolated patches of the
+    background bleeding through away from the person, not a clean edge."""
+    binary = (alpha_u8 > visible_thresh).astype(np.uint8)
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n_labels <= 1:
+        return 0.0
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest = areas.max()
+    total_visible = areas.sum()
+    strays = total_visible - largest
+    return float(strays) / float(alpha_u8.size)
+
+
+def assess_quality(alpha_mins, alpha_maxs, transparent_fracs, flicker_deltas, stray_fracs=None):
+    """Turn a short run of per-frame cutout numbers into a plain verdict.
+
+    Thresholds are heuristics tuned on real test clips (plain wall, busy
+    bookshelf, bright window, dark-on-dark), not a guarantee - always show
+    the actual preview frame too, don't rely on numbers alone."""
+    reasons = []
+    mean_transparent = float(np.mean(transparent_fracs)) if transparent_fracs else 0.0
+    mean_flicker = float(np.mean(flicker_deltas)) if flicker_deltas else 0.0
+    min_a = min(alpha_mins) if alpha_mins else 0
+    max_a = max(alpha_maxs) if alpha_maxs else 0
+    mean_stray = float(np.mean(stray_fracs)) if stray_fracs else 0.0
+
+    if max_a < 200:
+        reasons.append("the person never reaches full opacity - likely a half-cut edge or very soft outline")
+    if min_a > 60:
+        reasons.append("the background never goes fully transparent - likely bleed-through from a busy background")
+    if mean_flicker > 0.06:
+        reasons.append("the outline is moving a lot between frames - likely a rough, flickery edge")
+    if mean_transparent < 0.15:
+        reasons.append("almost nothing was cut away - the mask may have failed or the person fills the whole frame")
+    if mean_stray > 0.004:
+        reasons.append("isolated patches of the background are showing through as semi-visible blobs away from the person")
+
+    return {"ok": len(reasons) == 0, "reasons": reasons}

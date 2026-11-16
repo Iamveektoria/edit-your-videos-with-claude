@@ -11,7 +11,7 @@ Writes:
 import sys, os, subprocess, time
 import numpy as np
 import cv2
-from matte import MatteStream, MODEL_DEFAULT
+from matte import MatteStream, MODEL_DEFAULT, assess_quality, stray_fraction
 
 
 def make_checkerboard(w, h, tile=40):
@@ -127,9 +127,73 @@ def run(input_path, out_dir, model_path=MODEL_DEFAULT, max_frames=None):
     }
 
 
+def run_preflight(input_path, out_dir, model_path=MODEL_DEFAULT, sample_frames=15):
+    """Quick check before any full render: cuts out a short run of frames from
+    roughly 40% into the clip, saves ONE preview frame over a checkerboard,
+    and writes a plain verdict. Never renders the full video."""
+    os.makedirs(out_dir, exist_ok=True)
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise SystemExit(f"could not open {input_path}")
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or sample_frames
+    start = max(0, int(n_total * 0.4) - sample_frames // 2)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+
+    stream = MatteStream(model_path)
+    checker = make_checkerboard(W, H)
+
+    alpha_mins, alpha_maxs, transparent_fracs, flicker_deltas, stray_fracs = [], [], [], [], []
+    prev_raw = None
+    mid_rgba = None
+
+    for i in range(sample_frames):
+        ok, frame_bgr = cap.read()
+        if not ok:
+            break
+        alpha_u8, raw_mask, rgb = stream.next(frame_bgr)
+        if prev_raw is not None:
+            flicker_deltas.append(float(np.mean(np.abs(raw_mask - prev_raw))))
+        prev_raw = raw_mask
+        alpha_mins.append(int(alpha_u8.min()))
+        alpha_maxs.append(int(alpha_u8.max()))
+        transparent_fracs.append(float(np.mean(alpha_u8 < 10)))
+        stray_fracs.append(stray_fraction(alpha_u8))
+        if i == sample_frames // 2:
+            mid_rgba = np.dstack([rgb, alpha_u8])
+
+    cap.release()
+    stream.close()
+
+    if mid_rgba is None:
+        raise SystemExit("could not read enough frames for a preflight check")
+
+    bgr = cv2.cvtColor(mid_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.float32) / 255.0
+    a = mid_rgba[:, :, 3:4].astype(np.float32) / 255.0
+    comp = (bgr * a + (checker.astype(np.float32) / 255.0) * (1 - a)) * 255.0
+    preview_path = os.path.join(out_dir, "preview_frame.png")
+    cv2.imwrite(preview_path, comp.astype(np.uint8))
+
+    verdict = assess_quality(alpha_mins, alpha_maxs, transparent_fracs, flicker_deltas, stray_fracs)
+    report_path = os.path.join(out_dir, "preflight_report.txt")
+    with open(report_path, "w") as rf:
+        rf.write("OK\n" if verdict["ok"] else "CHECK\n")
+        for r in verdict["reasons"]:
+            rf.write(r + "\n")
+    print(open(report_path).read())
+    return {"preview_frame": preview_path, "report": report_path, **verdict}
+
+
 if __name__ == "__main__":
-    inp = sys.argv[1]
-    out = sys.argv[2]
-    model = sys.argv[3] if len(sys.argv) > 3 else MODEL_DEFAULT
-    max_frames = int(sys.argv[4]) if len(sys.argv) > 4 else None
-    run(inp, out, model, max_frames)
+    if len(sys.argv) > 1 and sys.argv[1] == "--preflight":
+        inp = sys.argv[2]
+        out = sys.argv[3]
+        model = sys.argv[4] if len(sys.argv) > 4 else MODEL_DEFAULT
+        run_preflight(inp, out, model)
+    else:
+        inp = sys.argv[1]
+        out = sys.argv[2]
+        model = sys.argv[3] if len(sys.argv) > 3 else MODEL_DEFAULT
+        max_frames = int(sys.argv[4]) if len(sys.argv) > 4 else None
+        run(inp, out, model, max_frames)
