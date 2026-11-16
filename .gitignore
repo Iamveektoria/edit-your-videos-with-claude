@@ -1,0 +1,5 @@
+.claude/skills/edit-video/scripts/selfie_segmenter.tflite
+output/
+node_modules/
+*.pyc
+__pycache__/

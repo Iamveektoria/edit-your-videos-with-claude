@@ -19,3 +19,7 @@ Once it's open, type /edit-video to begin, and follow your guide from there.
 ## If something looks stuck
 
 Renders can take a few minutes. That's normal. If it stops responding, just say "please continue."
+
+## One-time setup you might see
+
+The first time you use `/edit-video cutout`, `/edit-video blur`, `/edit-video background`, or any style that cuts you out of your background, Claude installs a small, free Google tool (~40MB, Apache-2.0 licence) and downloads a tiny background-removal model (~250KB) in the background. You don't need to do anything — if your coding environment asks you to choose a network/access level when you first create it, choosing "Trusted" or "Full" avoids a one-time prompt later. On Linux-based environments this also needs two small graphics libraries (`libegl1`, `libgles2`), which Claude installs the same way. If it ever can't reach the internet for this, it will tell you in one line what to allow.
